@@ -52,14 +52,10 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ## 开源说明
 
 - 当前仓库保留完整源码
-- 已移除本地运行态、真实账号、真实 key、真实 session 与历史仓库元数据
-- 需要在正式发布前补充最终 `LICENSE`
+- License 见根目录 `LICENSE`
 
-## 社区发布
+## 适用场景
 
-如果用于 LINUX DO 社区开源推广，建议同时准备：
-
-- 项目介绍正文
-- AI 辅助生成/润色说明截图
-- 最终 License
-- 首个公开版本 tag 或 release
+- 批量注册 Retool 账号
+- 采集浏览器登录态
+- 为后续账号管理和网关系统准备结构化数据

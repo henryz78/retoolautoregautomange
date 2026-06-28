@@ -44,25 +44,6 @@ Inside the full repository, this submodule is the management and serving layer:
   - bundle import/export
   - account refresh job execution
 
-## Project Status
-
-Current release is a practical first open-source cut focused on single-instance internal deployments.
-
-Included:
-
-- local runtime
-- file-backed state
-- admin page
-- bundle import/export workflow
-- desktop browser collection scripts
-
-Not included:
-
-- database-backed control plane
-- automatic token renewal
-- distributed multi-instance coordination
-- container/service deployment templates
-
 ## Architecture
 
 ```text
@@ -236,25 +217,6 @@ The built-in admin UI currently supports:
 - running account refresh jobs
 - reviewing audit history
 
-## Security Notes
-
-Do not commit real runtime files:
-
-- `orgs.json`
-- `api_keys.json`
-- `accounts.json`
-- `client_api_keys.json`
-- `runtime/`
-- `session_bundle*.json`
-- `signup_accounts.csv`
-
-Only keep desensitized examples in:
-
-- `api_keys.example.json`
-- `orgs.example.json`
-- `accounts_import_template.csv`
-- `orgs_import_template.csv`
-
 ## Limitations
 
 - file-backed state only
@@ -271,16 +233,6 @@ Only keep desensitized examples in:
 - safer operator workflows for account refresh
 - richer health and usage visibility
 
-## Community
-
-This project is being prepared for public release and community sharing.
-
-If you publish it to LINUX DO:
-
-- keep the full source open
-- keep the community attribution visible
-- keep AI-assisted project-introduction disclosures consistent with the post requirements
-
 ## License
 
-Choose and add your final open-source license before publishing.
+MIT
