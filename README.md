@@ -59,3 +59,9 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ## License
 
 MIT
+
+## Acknowledgement
+
+Thanks to the LINUX DO community for discussion, feedback, and inspiration.
+
+LINUX DO: https://linux.do
