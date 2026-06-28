@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv/
+venv/
+.DS_Store
+*.log
+
+# Runtime and collected browser/session state are sensitive
+runtime/
+
+# Real local credentials/session pools must stay out of version control
+orgs.json
+api_keys.json
+accounts.json
+client_api_keys.json
+gateway_config.local.json
+*.bundle.json
+session_bundle*.json
+managed_orgs*.json
+account_sessions*.json
+health*.json
+conversations*.json
+audit*.json

@@ -1,0 +1,3 @@
+id,domain_name,x_xsrf_token,accessToken,enabled
+office-org-001,example-001.retool.com,replace-xsrf-token-1,replace-access-token-1,true
+office-org-002,example-002.retool.com,replace-xsrf-token-2,replace-access-token-2,true

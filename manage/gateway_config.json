@@ -1,0 +1,30 @@
+{
+  "conversation_header": "X-Conversation-ID",
+  "timezone": "Asia/Shanghai",
+  "orgs_file": "orgs.json",
+  "allow_empty_org_pool": true,
+  "request_timeout_seconds": 120,
+  "poll_interval_seconds": 1.0,
+  "poll_max_attempts": 300,
+  "mapping_ttl_seconds": 604800,
+  "health_cooldown_seconds": 300,
+  "health_refresh_interval_seconds": 300,
+  "admin_warning_days": 2,
+  "audit_history_limit": 500,
+  "models": [
+    {
+      "id": "gpt-5.5",
+      "owned_by": "openai",
+      "agent_name": "gpt5",
+      "model_name": "gpt-5.5",
+      "display_name": "Retool pooled GPT-5.5"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "owned_by": "anthropic",
+      "agent_name": "claude",
+      "model_name": "claude-sonnet-4-6",
+      "display_name": "Retool pooled Claude Sonnet 4.6"
+    }
+  ]
+}

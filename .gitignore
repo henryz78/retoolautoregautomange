@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local browser/runtime data
+geekez-user-data/
+GeekEZ.Browser-1.5.4-win-x64-portable/
+.playwright-mcp/
+manage/runtime/
+manage/signup_accounts.csv
+signup_accounts.csv
+runtime_*.js
+runtime_*.png
+
+# Local captures and temporary files
+*.har
+tmp_*.html
+
+# Trellis / agent runtime state
+.trellis/.runtime/
+.trellis/.current-task
+.trellis/.developer
+.trellis/.agents/
+.agent-log
+.session-id
+.plan-log
+.ralph-state.json
+
+# Local AI collaboration instructions
+AGENTS.md

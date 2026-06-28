@@ -1,0 +1,11 @@
+[
+  {
+    "id": "office-org-001",
+    "domain_name": "example.retool.com",
+    "x_xsrf_token": "your-xsrf-token",
+    "accessToken": "your-access-token",
+    "enabled": true,
+    "verified_models": ["gpt-5.5", "claude-sonnet-4-6"],
+    "auth_state": "ready"
+  }
+]

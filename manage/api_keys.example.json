@@ -1,0 +1,9 @@
+[
+  {
+    "id": "office-default",
+    "key": "sk-example-internal-key",
+    "enabled": true,
+    "owner": "office",
+    "scopes": ["inference", "admin"]
+  }
+]

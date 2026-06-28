@@ -1,0 +1,2 @@
+email,password,expected_subdomain,enabled,notes
+example.user@example.com,replace-with-password,example-subdomain,true,branch-a
