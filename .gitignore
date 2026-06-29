@@ -14,6 +14,7 @@ runtime_*.png
 
 # Local captures and temporary files
 *.har
+!3、创建agent配置agent模型.har
 tmp_*.html
 
 # Trellis / agent runtime state
