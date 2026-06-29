@@ -272,9 +272,11 @@ async def create_and_configure_agent(
     
     # 7. 等待页面跳转到编辑器
     workflow_id = ""
-    for _ in range(20):
+    for _ in range(25):
         await page.wait_for_timeout(1000)
-        match = re.search(r"/rr/edit/([a-f0-9\-]{36})", page.url)
+        print(f"  -> 等待跳转中... 当前 URL: {page.url}")
+        # 兼容匹配所有可能路径下的 36 位 UUID (不管它是 /rr/edit/ 还是 /agents/ 还是 /workflows/)
+        match = re.search(r"/([a-f0-9\-]{36})", page.url)
         if match:
             workflow_id = match.group(1)
             break
