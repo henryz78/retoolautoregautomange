@@ -15,7 +15,7 @@
     {
       "id": "gpt-5.5",
       "owned_by": "openai",
-      "agent_name": "gpt5",
+      "agent_name": "gpt",
       "display_name": "Retool pooled GPT-5.5"
     },
     {

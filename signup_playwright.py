@@ -397,9 +397,9 @@ async def create_and_configure_agent(
 async def create_and_configure_agents(page, workspace_base_url: str) -> None:
     agent_configs = [
         AgentConfig(
-            name=os.getenv("RET0OL_AGENT_NAME", "gpt5"),
+            name=os.getenv("RET0OL_AGENT_NAME", "gpt"),
             description="",
-            model=os.getenv("RET0OL_AGENT_MODEL", "gpt-4o"), 
+            model=os.getenv("RET0OL_AGENT_MODEL", "gpt-5.5"), 
             provider="openai",
             temperature=0.3,
             max_iterations=50,
