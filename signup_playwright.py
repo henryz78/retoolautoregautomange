@@ -61,12 +61,26 @@ async def fill_signup_form(page) -> None:
 
 
 async def fill_followup_form(page) -> None:
-    text_inputs = page.locator("input[type='text']")
-    count = await text_inputs.count()
-    if count < 2:
-        raise RuntimeError("followup 页面未找到足够的文本输入框")
-    await text_inputs.nth(0).fill(FIRST_NAME)
-    await text_inputs.nth(1).fill(SUBDOMAIN)
+    # 适配新的 Onboarding/Followup 页面表单。
+    # 页面有 "What's your full name?" 和 "What's the name of your organization?"
+    # 输入框可能使用了 placeholder，或者就是普通的 input[type="text"]。
+    # 我们优先通过 placeholder 或者标签定位，如果不行再退化为 nth(0) 和 nth(1)。
+    
+    # 等待输入框加载并可见
+    first_input = page.locator('input[placeholder="Grace Hopper"], input[name="fullName"], input[type="text"]').first
+    await first_input.wait_for(state="visible", timeout=15000)
+    
+    # 填充姓名
+    await first_input.fill(FIRST_NAME)
+    
+    # 填充子域名组织名称
+    second_input = page.locator('input[placeholder="my-org"], input[name="subdomain"], input[type="text"]').nth(1)
+    if await second_input.count() == 0:
+        # 如果没有找到第二个，可能直接用 name="orgName" 或其他的。
+        # 兜底：直接通过第二个普通的 text 框输入
+        second_input = page.locator('input[type="text"]').nth(1)
+    
+    await second_input.fill(SUBDOMAIN)
 
 
 async def main() -> None:
@@ -114,7 +128,14 @@ async def main() -> None:
         await page.wait_for_url(f"**{FOLLOWUP_URL_PART}**", timeout=60000)
         print("\nfollowup url:", page.url)
 
+        # 稍微等一秒，确保新的 DOM 结构渲染完全，因为可能存在前端渲染延迟
+        await page.wait_for_timeout(2000)
         await fill_followup_form(page)
+
+        # 稍微等待子域名冲突检测的 "Checking..." 消失（在 Continue 上方）
+        # 页面上有 "Checking..." 动画或按钮变灰色
+        # 我们这里等待一下，最长等 5 秒，或者直接点击
+        await page.wait_for_timeout(2000)
 
         followup_button = page.get_by_role("button", name="Continue").last
         if await followup_button.count() == 0:
