@@ -342,7 +342,7 @@ async def create_and_configure_agent(
     create_payload["description"] = agent_config.description
     create_payload["folderId"] = folder_id
 
-    print(f"  -> 正在创建 AI 机器人: {agent_name} ({agent_config.model})...")
+    print(f"  -> 正在通过 API 创建 AI 机器人: {agent_name} ({agent_config.model})...")
     created_workflow = await workspace_client.create_workflow(create_payload)
     if not isinstance(created_workflow, dict):
         raise RuntimeError("创建 agent 后返回数据格式异常")
@@ -394,6 +394,37 @@ async def create_and_configure_agent(
     }
 
 
+async def create_agent_via_ui(page, workspace_base_url: str, name: str) -> None:
+    # 兜底方案：如果 HAR 文件丢失，通过 Playwright UI 操作全自动模拟点击创建机器人！
+    print(f"  -> [UI 模式] 正在通过网页点击创建机器人 {name}...")
+    
+    # 1. 导航到 AI 页面
+    await page.goto(f"{workspace_base_url}/ai", wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(3000)
+    
+    # 2. 点击 "Create agent" 按钮
+    create_btn = page.locator('button:has-text("Create agent"), button:has-text("Create"), :text-matches("Create agent", "i")').first
+    await create_btn.wait_for(state="visible", timeout=15000)
+    await create_btn.click()
+    await page.wait_for_timeout(2000)
+    
+    # 3. 填入机器人名字
+    name_input = page.locator('input[placeholder="Agent name"], input[type="text"], input[name="name"]').first
+    await name_input.wait_for(state="visible", timeout=10000)
+    await name_input.fill(name)
+    await page.wait_for_timeout(1000)
+    
+    # 4. 点击确认创建按钮
+    confirm_btn = page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]').last
+    await confirm_btn.click()
+    await page.wait_for_timeout(5000)
+    
+    # 5. 回到工作空间主页
+    await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(2000)
+    print(f"  -> [UI 模式] 机器人 {name} 创建成功！")
+
+
 async def create_and_configure_agents(page, workspace_base_url: str) -> None:
     agent_configs = [
         AgentConfig(
@@ -420,9 +451,15 @@ async def create_and_configure_agents(page, workspace_base_url: str) -> None:
 
     for config in agent_configs:
         try:
+            # 优先用 API 模板创建（高智商配置）
             await create_and_configure_agent(page, workspace_base_url, config)
         except Exception as exc:
-            print(f"[WARN] 自动配置 AI 机器人 {config.name} 失败: {exc}，请稍后手动在网页创建。")
+            # 如果 HAR 文件丢失，启动 UI 自动点击创建机器人兜底！
+            print(f"[WARN] 模板创建失败 ({exc})。启动 UI 兜底自动化创建...")
+            try:
+                await create_agent_via_ui(page, workspace_base_url, config.name)
+            except Exception as ui_exc:
+                print(f"[ERROR] 网页 UI 自动化创建机器人 {config.name} 也失败了: {ui_exc}")
 
 
 # =====================================================================
