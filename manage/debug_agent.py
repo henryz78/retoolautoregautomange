@@ -2,6 +2,7 @@ import json
 import os
 import re
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 def request_retool(method: str, url: str, access_token: str, xsrf_token: str, payload: dict = None) -> dict:
@@ -10,6 +11,7 @@ def request_retool(method: str, url: str, access_token: str, xsrf_token: str, pa
     req.add_header("content-type", "application/json")
     req.add_header("cookie", f"accessToken={access_token}; xsrfToken={xsrf_token}")
     req.add_header("x-xsrf-token", xsrf_token)
+    req.add_header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     data = None
     if payload:
@@ -19,6 +21,13 @@ def request_retool(method: str, url: str, access_token: str, xsrf_token: str, pa
         with urllib.request.urlopen(req, data=data) as response:
             res_body = response.read().decode("utf-8")
             return json.loads(res_body)
+    except urllib.error.HTTPError as e:
+        print(f"请求失败: {method} {url} -> HTTP Error {e.code}: {e.reason}")
+        try:
+            print("错误详情:", e.read().decode("utf-8")[:1000])
+        except Exception:
+            pass
+        return {}
     except Exception as e:
         print(f"请求失败: {method} {url} -> {e}")
         return {}
