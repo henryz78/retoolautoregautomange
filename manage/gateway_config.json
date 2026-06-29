@@ -16,14 +16,12 @@
       "id": "gpt-5.5",
       "owned_by": "openai",
       "agent_name": "gpt5",
-      "model_name": "gpt-5.5",
       "display_name": "Retool pooled GPT-5.5"
     },
     {
       "id": "claude-sonnet-4-6",
       "owned_by": "anthropic",
       "agent_name": "claude",
-      "model_name": "claude-sonnet-4-6",
       "display_name": "Retool pooled Claude Sonnet 4.6"
     }
   ]
