@@ -293,7 +293,14 @@ async def create_and_configure_agent(
     provider_id, provider_name, provider_resource_name = resolve_agent_provider(ai_settings, agent_config.provider)
     
     # 获取刚刚创建的默认 workflow 配置
-    created_workflow = await workspace_client.get_workflow(workflow_id)
+    created_workflow_response = await workspace_client.get_workflow(workflow_id)
+    if isinstance(created_workflow_response, dict) and "workflow" in created_workflow_response:
+        created_workflow = created_workflow_response["workflow"]
+    elif isinstance(created_workflow_response, dict) and "data" in created_workflow_response:
+        created_workflow = created_workflow_response["data"]
+    else:
+        created_workflow = created_workflow_response
+
     template_data = created_workflow.get("templateData")
     if not isinstance(template_data, str) or not template_data:
         raise RuntimeError("未能获取新创建机器人的 templateData")
