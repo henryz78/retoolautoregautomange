@@ -28,3 +28,7 @@ tmp_*.html
 
 # Local AI collaboration instructions
 AGENTS.md
+
+# CloakBrowser profiles
+cloakbrowser_profile/
+
