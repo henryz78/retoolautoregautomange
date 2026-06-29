@@ -171,6 +171,38 @@ async def main() -> None:
         if init_org_resp.status >= 400:
             raise RuntimeError("initializeOrganization 接口返回失败")
 
+        # 处理随后的问卷调查页面（Role, Familiarity, Referral）
+        print("\n处理后续问卷调查...")
+        for i in range(5):
+            await page.wait_for_load_state("domcontentloaded")
+            url = page.url
+            print(f"当前页面 URL: {url}")
+            
+            if "/auth/role" in url:
+                print("正在选择角色: Software Engineering...")
+                role_locator = page.get_by_text("Software Engineering")
+                await role_locator.first.click()
+                await page.get_by_role("button", name="Continue").last.click()
+                await page.wait_for_timeout(3000)
+            elif "/auth/familiarity" in url:
+                print("正在选择熟悉度: Advanced...")
+                fam_locator = page.get_by_text("Advanced")
+                await fam_locator.first.click()
+                await page.get_by_role("button", name="Continue").last.click()
+                await page.wait_for_timeout(3000)
+            elif "/auth/referralForm" in url:
+                print("正在选择推荐来源: Web search...")
+                ref_locator = page.get_by_text("Web search")
+                await ref_locator.first.click()
+                await page.get_by_role("button", name="Continue").last.click()
+                # 最后一页问卷提交后，等待跳转到控制台
+                await page.wait_for_timeout(5000)
+            elif "/resources" in url or "/apps" in url or ("retool.com" in url and "auth" not in url):
+                print("已成功到达控制台，问卷填写完毕！")
+                break
+            else:
+                await page.wait_for_timeout(2000)
+
         print("\nfinal url:", page.url)
         print("cookies:", await context.cookies([BASE]))
 
