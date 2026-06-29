@@ -260,16 +260,11 @@ async def create_and_configure_agent(
     await start_scratch.click()
     await page.wait_for_timeout(1000)
     
-    # 4. 点击右下角的 Create 按钮 (进入填名字界面)
-    next_btn = page.locator('div[class*="modal"] button:has-text("Create")').first
-    await next_btn.click()
-    await page.wait_for_timeout(1500)
-
-    # 5. 填入机器人名字 (如 gpt 或 claude)
+    # 4. 填入机器人名字 (如 gpt 或 claude) —— 注意：必须先填名字，底部的 Create 按钮才会变成启用状态！
     name_input = page.locator('div[class*="modal"] input[placeholder="Weather Agent"], div[class*="modal"] input[placeholder="Agent name"], div[class*="modal"] input[type="text"]').first
-    await name_input.wait_for(state="visible", timeout=10000)
+    await name_input.wait_for(state="visible", timeout=15000)
     await name_input.fill(agent_config.name)
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(1000)
     
     # 6. 点击确认创建按钮 (真正开始创建并跳转)
     confirm_btn = page.locator('div[class*="modal"] button:has-text("Create"), div[class*="modal"] button[type="submit"]').first
