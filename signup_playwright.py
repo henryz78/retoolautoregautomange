@@ -420,11 +420,22 @@ async def create_agent_via_ui_and_configure(
     await start_scratch.click()
     await page.wait_for_timeout(1000)
     
-    # 4. 点击右下角的 Create 按钮确认创建
-    confirm_btn = page.locator('button:has-text("Create")').last
+    # 4. 点击右下角的 Create 按钮 (进入填名字界面)
+    next_btn = page.locator('button:has-text("Create")').last
+    await next_btn.click()
+    await page.wait_for_timeout(1500)
+
+    # 5. 填入机器人名字 (如 gpt 或 claude)
+    name_input = page.locator('input[placeholder="Weather Agent"], input[placeholder="Agent name"], input[type="text"], input[name="name"]').first
+    await name_input.wait_for(state="visible", timeout=10000)
+    await name_input.fill(agent_config.name)
+    await page.wait_for_timeout(500)
+    
+    # 6. 点击确认创建按钮 (真正开始创建并跳转)
+    confirm_btn = page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]').last
     await confirm_btn.click()
     
-    # 5. 等待页面跳转到编辑器
+    # 7. 等待页面跳转到编辑器
     workflow_id = ""
     for _ in range(20):
         await page.wait_for_timeout(1000)
@@ -438,7 +449,7 @@ async def create_agent_via_ui_and_configure(
 
     print(f"  -> [UI-API 混合模式] 成功获取新创建的机器人的 workflowId: {workflow_id}")
     
-    # 6. 使用 API 进行高智商配置
+    # 8. 使用 API 进行高智商配置
     workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
     ai_settings = await workspace_client.get_ai_settings()
     
@@ -477,7 +488,7 @@ async def create_agent_via_ui_and_configure(
         workflow_save_id.strip(),
     )
     
-    # 7. 回到工作空间主页
+    # 9. 回到工作空间主页
     await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
     print(f"  -> [UI-API 混合模式] 机器人 {agent_config.name} 配置发布完成！")
