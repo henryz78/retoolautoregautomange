@@ -135,10 +135,12 @@ class GatewayService:
     def resolve_conversation_id(self, request: ChatCompletionRequest, header_value: Optional[str]) -> str:
         conversation_id = header_value or request.conversation_id
         if not conversation_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing conversation identifier. Provide X-Conversation-ID or conversation_id.",
-            )
+            import hashlib
+            first_msg_content = ""
+            if request.messages:
+                first_msg_content = str(request.messages[0].content or "")
+            h = hashlib.md5(first_msg_content.encode("utf-8", errors="ignore")).hexdigest()
+            conversation_id = f"hash-{h}"
         return conversation_id
 
     @staticmethod
