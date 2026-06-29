@@ -739,7 +739,7 @@ async def main() -> None:
                 break
             await page.wait_for_timeout(1000)
 
-        print("正在自动创建并配置 AI 机器人 (GPT-4o & Claude 3.5 Sonnet)...")
+        print("正在自动创建并配置 AI 机器人 (gpt-5.5 & Claude 3.5 Sonnet)...")
         try:
             await create_and_configure_agents(page, workspace_base_url)
             print("AI 机器人全自动配置完成！")
