@@ -476,11 +476,17 @@ async def main() -> None:
 
         if "/auth/verifyEmail" in page.url:
             print("检测到同域名团队提示，选择创建新组织...")
-            name_input = page.locator('input[placeholder="Grace Hopper"], input[type="text"]').first
+            await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(2000)
+            
+            # 使用 get_by_test_id 和备用输入框选择器防止找不到元素
+            name_input = page.locator('input[placeholder="Grace Hopper"], input[type="text"], input[name="fullName"]').first
             await name_input.wait_for(state="visible", timeout=15000)
             await name_input.fill(FIRST_NAME)
             
-            create_org_btn = page.get_by_text("create a new organization", exact=False).first
+            create_org_btn = page.get_by_role("button", name=re.compile("create a new organization", re.IGNORECASE)).first
+            if await create_org_btn.count() == 0:
+                create_org_btn = page.get_by_text("create a new organization", exact=False).first
             await create_org_btn.click()
             await page.wait_for_timeout(2000)
             
