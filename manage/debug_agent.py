@@ -99,6 +99,31 @@ def main():
         print(f"    - instructions: {repr(extract('instructions'))}")
         
     print("-" * 50)
+    
+    # 3. 诊断当前网关 orgs.json 里的活动账号
+    orgs_json_path = Path("orgs.json")
+    if not orgs_json_path.exists():
+        orgs_json_path = Path("manage/orgs.json")
+    if not orgs_json_path.exists():
+        orgs_json_path = Path("../manage/orgs.json")
+        
+    print("网关 orgs.json 活动路由诊断:")
+    if orgs_json_path.exists():
+        try:
+            with open(orgs_json_path, "r", encoding="utf-8") as f:
+                active_orgs = json.load(f)
+            if isinstance(active_orgs, list):
+                print(f"  - 发现网关激活账号数: {len(active_orgs)}")
+                for idx, o in enumerate(active_orgs, 1):
+                    print(f"    {idx}. 域名: {o.get('domain_name')} (ID: {o.get('id')})")
+            else:
+                print("  - [WARN] orgs.json 格式非列表！")
+        except Exception as e:
+            print(f"  - [WARN] 读取 orgs.json 失败: {e}")
+    else:
+        print("  - [WARN] 未找到 orgs.json 文件，网关目前没有导入任何账号！")
+        
+    print("-" * 50)
     print("诊断完毕！")
 
 if __name__ == "__main__":
