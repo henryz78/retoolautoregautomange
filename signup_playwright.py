@@ -297,7 +297,13 @@ async def create_and_configure_agent(
 
     print(f"  -> 成功获取新创建的机器人的 workflowId: {workflow_id}")
     
-    # 7. 使用 API 进行高智商配置
+    # 7. 在发起 API 请求配置前，必须先将浏览器页面导航离开编辑器（例如导航到 /agents 列表页）
+    # 否则，编辑器页面在后台处于激活状态时会定时自动同步并保存当前编辑器的默认配置，从而把我们 API 写入的高智商配置给覆盖/重置回去！
+    print("  -> 正在将页面导航离开编辑器以防止后台自动保存冲突...")
+    await page.goto(f"{workspace_base_url}/agents", wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(3000)
+
+    # 8. 使用 API 进行高智商配置
     workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
     ai_settings = await workspace_client.get_ai_settings()
     
@@ -343,7 +349,7 @@ async def create_and_configure_agent(
         workflow_save_id.strip(),
     )
     
-    # 8. 回到工作空间主页
+    # 9. 回到工作空间主页
     await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
     print(f"  -> 机器人 {agent_config.name} 配置发布完成！")
@@ -368,7 +374,7 @@ async def create_and_configure_agents(page, workspace_base_url: str) -> None:
         AgentConfig(
             name=os.getenv("RET0OL_AGENT_CLAUDE_NAME", "claude"),
             description="",
-            model=os.getenv("RET0OL_AGENT_CLAUDE_MODEL", "claude-3-5-sonnet"), 
+            model=os.getenv("RET0OL_AGENT_CLAUDE_MODEL", "claude-sonnet-4-6"), 
             provider="anthropic",
             temperature=0.3,
             max_iterations=10,
