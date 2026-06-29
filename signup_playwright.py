@@ -216,40 +216,6 @@ def build_agent_template_data(
     return updated
 
 
-def load_agent_create_seed_payload() -> dict[str, Any]:
-    from urllib.parse import urlsplit
-    har_path = os.path.join(os.path.dirname(__file__), "3、创建agent配置agent模型.har")
-    try:
-        with open(har_path, "r", encoding="utf-8") as har_file:
-            har_payload = json.load(har_file)
-    except OSError as exc:
-        raise RuntimeError(f"无法读取 agent 创建 HAR 文件: {har_path}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"agent 创建 HAR 不是有效 JSON: {har_path}") from exc
-
-    entries = har_payload.get("log", {}).get("entries", [])
-    for entry in entries:
-        request = entry.get("request", {})
-        if request.get("method") != "POST":
-            continue
-        if urlsplit(str(request.get("url") or "")).path != "/api/workflow":
-            continue
-
-        post_text = request.get("postData", {}).get("text")
-        if not isinstance(post_text, str) or not post_text.strip():
-            raise RuntimeError("agent 创建 HAR 中的 /api/workflow 请求缺少 postData.text")
-
-        try:
-            payload = json.loads(post_text)
-        except Exception:
-            payload = post_text
-        if not isinstance(payload, dict):
-            raise RuntimeError("agent 创建 HAR 中的 /api/workflow 请求体格式异常")
-        return payload
-
-    raise RuntimeError("agent 创建 HAR 中未找到 POST /api/workflow 请求")
-
-
 def resolve_agent_provider(ai_settings: Any, provider: str) -> tuple[str, str, str]:
     if not isinstance(ai_settings, dict):
         raise RuntimeError("aiSettings 响应格式异常")
@@ -271,168 +237,42 @@ def resolve_agent_provider(ai_settings: Any, provider: str) -> tuple[str, str, s
     return provider_id, provider_name, resource_name.strip()
 
 
-def resolve_agent_root_folder_id(agents_metadata: Any) -> int:
-    if not isinstance(agents_metadata, dict):
-        raise RuntimeError("agentsMetadata 响应格式异常")
-
-    folders = agents_metadata.get("agentFolders")
-    if not isinstance(folders, list) or not folders:
-        raise RuntimeError("agentsMetadata 中缺少 agentFolders")
-
-    for folder in folders:
-        if isinstance(folder, dict) and folder.get("systemFolder") and folder.get("folderType") == "agent":
-            folder_id = folder.get("id")
-            if isinstance(folder_id, int):
-                return folder_id
-
-    first_folder = folders[0]
-    if isinstance(first_folder, dict) and isinstance(first_folder.get("id"), int):
-        return first_folder["id"]
-
-    raise RuntimeError("未能从 agentsMetadata 中解析 agent folderId")
-
-
-def collect_existing_agent_names(agents_metadata: Any) -> set[str]:
-    if not isinstance(agents_metadata, dict):
-        return set()
-    agents = agents_metadata.get("agentsMetadata")
-    if not isinstance(agents, list):
-        return set()
-    names: set[str] = set()
-    for agent in agents:
-        if isinstance(agent, dict):
-            name = agent.get("name")
-            if isinstance(name, str) and name.strip():
-                names.add(name.strip())
-    return names
-
-
-def build_unique_agent_name(preferred_name: str, existing_names: set[str]) -> str:
-    if preferred_name not in existing_names:
-        return preferred_name
-
-    suffix = 2
-    while True:
-        candidate = f"{preferred_name}-{suffix}"
-        if candidate not in existing_names:
-            return candidate
-        suffix += 1
-
-
 async def create_and_configure_agent(
     page,
     workspace_base_url: str,
     agent_config: AgentConfig,
 ) -> dict[str, Any]:
-    workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
-    ai_settings = await workspace_client.get_ai_settings()
-    agents_metadata = await workspace_client.get_agents_metadata()
-    environments = await workspace_client.get_environments()
-
-    environments_list = environments.get("environments") if isinstance(environments, dict) else None
-    if not isinstance(environments_list, list) or not environments_list:
-        raise RuntimeError("workspace environments 未初始化完成，暂时不能创建 agent")
-
-    provider_id, provider_name, provider_resource_name = resolve_agent_provider(ai_settings, agent_config.provider)
-    folder_id = resolve_agent_root_folder_id(agents_metadata)
-    existing_names = collect_existing_agent_names(agents_metadata)
-    preferred_name = agent_config.name.strip() or "agent"
-    agent_name = build_unique_agent_name(preferred_name, existing_names)
-
-    seed_payload = load_agent_create_seed_payload()
-    create_payload = json.loads(json.dumps(seed_payload))
-    create_payload["name"] = agent_name
-    create_payload["description"] = agent_config.description
-    create_payload["folderId"] = folder_id
-
-    print(f"  -> 正在通过 API 创建 AI 机器人: {agent_name} ({agent_config.model})...")
-    created_workflow = await workspace_client.create_workflow(create_payload)
-    if not isinstance(created_workflow, dict):
-        raise RuntimeError("创建 agent 后返回数据格式异常")
-
-    workflow_id = created_workflow.get("id")
-    template_data = created_workflow.get("templateData")
-    if not isinstance(workflow_id, str) or not workflow_id.strip():
-        raise RuntimeError("创建 agent 后未返回 workflowId")
-    if not isinstance(template_data, str) or not template_data:
-        raise RuntimeError("创建 agent 后未返回 templateData")
-
-    updated_template_data = build_agent_template_data(
-        template_data,
-        provider_id=provider_id,
-        provider_name=provider_name,
-        provider_resource_name=provider_resource_name,
-        instructions=agent_config.instructions,
-        model=agent_config.model,
-        temperature=agent_config.temperature,
-        max_iterations=agent_config.max_iterations,
-        thinking_enabled=agent_config.thinking_enabled,
-    )
-
-    workflow_data = json.loads(json.dumps(created_workflow))
-    workflow_data["name"] = agent_name
-    workflow_data["description"] = agent_config.description
-    workflow_data["folderId"] = folder_id
-    workflow_data["templateData"] = updated_template_data
-
-    saved_workflow = await workspace_client.save_workflow(workflow_id, workflow_data)
-    if not isinstance(saved_workflow, dict):
-        raise RuntimeError("保存 agent 配置后返回数据格式异常")
-
-    workflow_save_id = saved_workflow.get("saveId")
-    if not isinstance(workflow_save_id, str) or not workflow_save_id.strip():
-        raise RuntimeError("保存 agent 配置后未返回 workflow saveId")
-
-    release_info = await workspace_client.release_workflow(
-        workflow_id,
-        workflow_save_id.strip(),
-    )
-    if not isinstance(release_info, dict):
-        raise RuntimeError("发布 agent 后返回数据格式异常")
-
-    print(f"  -> 机器人 {agent_name} 创建发布成功！")
-    return {
-        "workflowId": workflow_id,
-        "name": agent_name,
-    }
-
-
-async def create_agent_via_ui_and_configure(
-    page,
-    workspace_base_url: str,
-    agent_config: AgentConfig,
-) -> dict[str, Any]:
-    print(f"  -> [UI-API 混合模式] 正在网页点击创建机器人 {agent_config.name}...")
+    print(f"  -> 正在网页点击创建机器人 {agent_config.name} ({agent_config.model})...")
     
     # 1. 导航到 AI 页面
     await page.goto(f"{workspace_base_url}/agents", wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(3000)
     
     # 2. 点击 "Create agent" 或 "+ Agent" 按钮
-    create_btn = page.locator('button:has-text("Agent"), button:has-text("Create agent"), button:has-text("Create")').first
+    create_btn = page.locator('button:has-text("Agent"), button:has-text("Create agent"), [data-testid="EmptyState::CreateAgent"]').first
     await create_btn.wait_for(state="visible", timeout=15000)
     await create_btn.click()
     await page.wait_for_timeout(2000)
     
     # 3. 点击 "Start from scratch" 卡片
-    start_scratch = page.get_by_text("Start from scratch").first
+    start_scratch = page.locator('div[class*="modal"] :text("Start from scratch"), div[class*="modal"] :text-matches("Start from scratch", "i")').first
     await start_scratch.wait_for(state="visible", timeout=15000)
     await start_scratch.click()
     await page.wait_for_timeout(1000)
     
     # 4. 点击右下角的 Create 按钮 (进入填名字界面)
-    next_btn = page.locator('button:has-text("Create")').last
+    next_btn = page.locator('div[class*="modal"] button:has-text("Create")').first
     await next_btn.click()
     await page.wait_for_timeout(1500)
 
     # 5. 填入机器人名字 (如 gpt 或 claude)
-    name_input = page.locator('input[placeholder="Weather Agent"], input[placeholder="Agent name"], input[type="text"], input[name="name"]').first
+    name_input = page.locator('div[class*="modal"] input[placeholder="Weather Agent"], div[class*="modal"] input[placeholder="Agent name"], div[class*="modal"] input[type="text"]').first
     await name_input.wait_for(state="visible", timeout=10000)
     await name_input.fill(agent_config.name)
     await page.wait_for_timeout(500)
     
     # 6. 点击确认创建按钮 (真正开始创建并跳转)
-    confirm_btn = page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]').last
+    confirm_btn = page.locator('div[class*="modal"] button:has-text("Create"), div[class*="modal"] button[type="submit"]').first
     await confirm_btn.click()
     
     # 7. 等待页面跳转到编辑器
@@ -447,7 +287,7 @@ async def create_agent_via_ui_and_configure(
     if not workflow_id:
         raise RuntimeError("网页创建机器人后未能跳转到编辑器页面获取 workflowId")
 
-    print(f"  -> [UI-API 混合模式] 成功获取新创建的机器人的 workflowId: {workflow_id}")
+    print(f"  -> 成功获取新创建的机器人的 workflowId: {workflow_id}")
     
     # 8. 使用 API 进行高智商配置
     workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
@@ -491,7 +331,7 @@ async def create_agent_via_ui_and_configure(
     # 9. 回到工作空间主页
     await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
-    print(f"  -> [UI-API 混合模式] 机器人 {agent_config.name} 配置发布完成！")
+    print(f"  -> 机器人 {agent_config.name} 配置发布完成！")
     return {
         "workflowId": workflow_id,
         "name": agent_config.name,
@@ -523,16 +363,7 @@ async def create_and_configure_agents(page, workspace_base_url: str) -> None:
     ]
 
     for config in agent_configs:
-        try:
-            # 优先用 API 模板创建（高智商配置）
-            await create_and_configure_agent(page, workspace_base_url, config)
-        except Exception as exc:
-            # 如果 HAR 文件丢失，启动 UI 自动点击创建机器人，然后 API 重命名并发布！
-            print(f"[WARN] 模板创建失败 ({exc})。启动 UI 混合模式创建配置...")
-            try:
-                await create_agent_via_ui_and_configure(page, workspace_base_url, config)
-            except Exception as ui_exc:
-                print(f"[ERROR] 网页 UI 自动创建配置机器人 {config.name} 也失败了: {ui_exc}")
+        await create_and_configure_agent(page, workspace_base_url, config)
 
 
 # =====================================================================
@@ -739,7 +570,7 @@ async def main() -> None:
                 break
             await page.wait_for_timeout(1000)
 
-        print("正在自动创建并配置 AI 机器人 (gpt-5.5 & Claude 3.5 Sonnet)...")
+        print(f"正在自动创建并配置 AI 机器人 (gpt-5.5 & Claude 3.5 Sonnet)...")
         try:
             await create_and_configure_agents(page, workspace_base_url)
             print("AI 机器人全自动配置完成！")
