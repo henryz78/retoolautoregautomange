@@ -399,7 +399,7 @@ async def create_agent_via_ui(page, workspace_base_url: str, name: str) -> None:
     print(f"  -> [UI 模式] 正在通过网页点击创建机器人 {name}...")
     
     # 1. 导航到 AI 页面
-    await page.goto(f"{workspace_base_url}/ai", wait_until="domcontentloaded", timeout=30000)
+    await page.goto(f"{workspace_base_url}/agents", wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(3000)
     
     # 2. 点击 "Create agent" 按钮
