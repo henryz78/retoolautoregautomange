@@ -516,10 +516,20 @@ async def main() -> None:
             raise RuntimeError("signup 接口返回失败")
 
         print("等待页面重定向...")
-        for _ in range(30):
-            if "auth/" in page.url:
-                break
-            await page.wait_for_timeout(500)
+        try:
+            await page.wait_for_url(
+                lambda url: "/auth/followup" in url or "/auth/verifyEmail" in url,
+                timeout=25000
+            )
+        except PlaywrightTimeoutError:
+            try:
+                res_data = json.loads(signup_body)
+                redirect_uri = res_data.get("redirectUri")
+                if redirect_uri:
+                    print(f"自动重定向超时，手动跳转至: {BASE}{redirect_uri}")
+                    await page.goto(f"{BASE}{redirect_uri}", wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
 
         print("\n当前页面 URL:", page.url)
 
