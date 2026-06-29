@@ -141,19 +141,19 @@ async def main() -> None:
         if await followup_button.count() == 0:
             raise RuntimeError("未找到 followup Continue 按钮")
 
-        change_name_waiter = page.wait_for_response(
+        # 使用嵌套的 expect_response 代替 wait_for_response，以防 cloakbrowser 的 Page 包装类未暴露该方法。
+        async with page.expect_response(
             lambda resp: "/api/user/changeName" in resp.url and resp.request.method == "POST",
             timeout=60000,
-        )
-        init_org_waiter = page.wait_for_response(
-            lambda resp: "/api/organization/admin/initializeOrganization" in resp.url and resp.request.method == "POST",
-            timeout=60000,
-        )
+        ) as change_name_info:
+            async with page.expect_response(
+                lambda resp: "/api/organization/admin/initializeOrganization" in resp.url and resp.request.method == "POST",
+                timeout=60000,
+            ) as init_org_info:
+                await followup_button.click()
 
-        await followup_button.click()
-
-        change_name_resp = await change_name_waiter
-        init_org_resp = await init_org_waiter
+        change_name_resp = await change_name_info.value
+        init_org_resp = await init_org_info.value
 
         change_name_body = await response_body(change_name_resp)
         init_org_body = await response_body(init_org_resp)
