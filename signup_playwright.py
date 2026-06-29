@@ -101,6 +101,9 @@ class RetoolWorkspaceClient:
     async def get_environments(self) -> Any:
         return await self.request("GET", "/api/environments")
 
+    async def get_workflow(self, workflow_id: str) -> Any:
+        return await self.request("GET", f"/api/workflow/{workflow_id}")
+
     async def create_workflow(self, payload: dict[str, Any]) -> Any:
         return await self.request("POST", "/api/workflow", payload=payload)
 
@@ -394,35 +397,94 @@ async def create_and_configure_agent(
     }
 
 
-async def create_agent_via_ui(page, workspace_base_url: str, name: str) -> None:
-    # 兜底方案：如果 HAR 文件丢失，通过 Playwright UI 操作全自动模拟点击创建机器人！
-    print(f"  -> [UI 模式] 正在通过网页点击创建机器人 {name}...")
+async def create_agent_via_ui_and_configure(
+    page,
+    workspace_base_url: str,
+    agent_config: AgentConfig,
+) -> dict[str, Any]:
+    print(f"  -> [UI-API 混合模式] 正在网页点击创建机器人 {agent_config.name}...")
     
     # 1. 导航到 AI 页面
     await page.goto(f"{workspace_base_url}/agents", wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(3000)
     
-    # 2. 点击 "Create agent" 按钮
-    create_btn = page.locator('button:has-text("Create agent"), button:has-text("Create"), :text-matches("Create agent", "i")').first
+    # 2. 点击 "Create agent" 或 "+ Agent" 按钮
+    create_btn = page.locator('button:has-text("Agent"), button:has-text("Create agent"), button:has-text("Create")').first
     await create_btn.wait_for(state="visible", timeout=15000)
     await create_btn.click()
     await page.wait_for_timeout(2000)
     
-    # 3. 填入机器人名字
-    name_input = page.locator('input[placeholder="Agent name"], input[type="text"], input[name="name"]').first
-    await name_input.wait_for(state="visible", timeout=10000)
-    await name_input.fill(name)
+    # 3. 点击 "Start from scratch" 卡片
+    start_scratch = page.get_by_text("Start from scratch").first
+    await start_scratch.wait_for(state="visible", timeout=15000)
+    await start_scratch.click()
     await page.wait_for_timeout(1000)
     
-    # 4. 点击确认创建按钮
-    confirm_btn = page.locator('button:has-text("Create"), button:has-text("Save"), button[type="submit"]').last
+    # 4. 点击右下角的 Create 按钮确认创建
+    confirm_btn = page.locator('button:has-text("Create")').last
     await confirm_btn.click()
-    await page.wait_for_timeout(5000)
     
-    # 5. 回到工作空间主页
+    # 5. 等待页面跳转到编辑器
+    workflow_id = ""
+    for _ in range(20):
+        await page.wait_for_timeout(1000)
+        match = re.search(r"/rr/edit/([a-f0-9\-]{36})", page.url)
+        if match:
+            workflow_id = match.group(1)
+            break
+            
+    if not workflow_id:
+        raise RuntimeError("网页创建机器人后未能跳转到编辑器页面获取 workflowId")
+
+    print(f"  -> [UI-API 混合模式] 成功获取新创建的机器人的 workflowId: {workflow_id}")
+    
+    # 6. 使用 API 进行高智商配置
+    workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
+    ai_settings = await workspace_client.get_ai_settings()
+    
+    provider_id, provider_name, provider_resource_name = resolve_agent_provider(ai_settings, agent_config.provider)
+    
+    # 获取刚刚创建的默认 workflow 配置
+    created_workflow = await workspace_client.get_workflow(workflow_id)
+    template_data = created_workflow.get("templateData")
+    if not isinstance(template_data, str) or not template_data:
+        raise RuntimeError("未能获取新创建机器人的 templateData")
+
+    updated_template_data = build_agent_template_data(
+        template_data,
+        provider_id=provider_id,
+        provider_name=provider_name,
+        provider_resource_name=provider_resource_name,
+        instructions=agent_config.instructions,
+        model=agent_config.model,
+        temperature=agent_config.temperature,
+        max_iterations=agent_config.max_iterations,
+        thinking_enabled=agent_config.thinking_enabled,
+    )
+
+    workflow_data = json.loads(json.dumps(created_workflow))
+    workflow_data["name"] = agent_config.name
+    workflow_data["description"] = agent_config.description
+    workflow_data["templateData"] = updated_template_data
+
+    saved_workflow = await workspace_client.save_workflow(workflow_id, workflow_data)
+    workflow_save_id = saved_workflow.get("saveId")
+    if not isinstance(workflow_save_id, str) or not workflow_save_id.strip():
+        raise RuntimeError("保存 agent 配置后未返回 saveId")
+
+    await workspace_client.release_workflow(
+        workflow_id,
+        workflow_save_id.strip(),
+    )
+    
+    # 7. 回到工作空间主页
     await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
-    print(f"  -> [UI 模式] 机器人 {name} 创建成功！")
+    print(f"  -> [UI-API 混合模式] 机器人 {agent_config.name} 配置发布完成！")
+    return {
+        "workflowId": workflow_id,
+        "name": agent_config.name,
+    }
 
 
 async def create_and_configure_agents(page, workspace_base_url: str) -> None:
@@ -454,12 +516,12 @@ async def create_and_configure_agents(page, workspace_base_url: str) -> None:
             # 优先用 API 模板创建（高智商配置）
             await create_and_configure_agent(page, workspace_base_url, config)
         except Exception as exc:
-            # 如果 HAR 文件丢失，启动 UI 自动点击创建机器人兜底！
-            print(f"[WARN] 模板创建失败 ({exc})。启动 UI 兜底自动化创建...")
+            # 如果 HAR 文件丢失，启动 UI 自动点击创建机器人，然后 API 重命名并发布！
+            print(f"[WARN] 模板创建失败 ({exc})。启动 UI 混合模式创建配置...")
             try:
-                await create_agent_via_ui(page, workspace_base_url, config.name)
+                await create_agent_via_ui_and_configure(page, workspace_base_url, config)
             except Exception as ui_exc:
-                print(f"[ERROR] 网页 UI 自动化创建机器人 {config.name} 也失败了: {ui_exc}")
+                print(f"[ERROR] 网页 UI 自动创建配置机器人 {config.name} 也失败了: {ui_exc}")
 
 
 # =====================================================================
