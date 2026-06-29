@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -173,7 +174,7 @@ async def main() -> None:
         if await followup_button.count() == 0:
             raise RuntimeError("未找到 followup Continue 按钮")
 
-        # 使用嵌套 of expect_response 代替 wait_for_response，以防 cloakbrowser 的 Page 包装类未暴露该方法。
+        # 使用嵌套的 expect_response 代替 wait_for_response，以防 cloakbrowser 的 Page 包装类未暴露该方法。
         async with page.expect_response(
             lambda resp: "/api/user/changeName" in resp.url and resp.request.method == "POST",
             timeout=60000,
@@ -249,37 +250,58 @@ async def main() -> None:
                 access_token = cookie["value"]
 
         if xsrf_token and access_token:
-            session_data = {
+            now_time = int(time.time())
+            expires_at = now_time + 7 * 24 * 60 * 60  # 默认 7 天有效期
+            
+            session_org = {
                 "id": SUBDOMAIN,
                 "domain_name": f"{SUBDOMAIN}.retool.com",
                 "x_xsrf_token": xsrf_token,
                 "accessToken": access_token,
-                "enabled": True
+                "enabled": True,
+                "source_email": EMAIL,
+                "refreshed_at": now_time,
+                "expires_at": expires_at,
+                "verified_models": ["gpt-5.5", "claude-sonnet-4-6"]
             }
+            
             # 网关所需的 session_bundle.json 文件保存路径
             bundle_dir = os.path.join(os.path.dirname(__file__), "manage", "runtime")
             os.makedirs(bundle_dir, exist_ok=True)
             bundle_path = os.path.join(bundle_dir, "session_bundle.json")
             
-            # 读取旧的 bundle 列表并合并
-            bundle_list = []
+            # 读取并遵循网关定义的 Pydantic SessionBundle 规范
+            orgs_list = []
             if os.path.exists(bundle_path):
                 try:
                     with open(bundle_path, "r", encoding="utf-8") as f:
-                        bundle_list = json.load(f)
-                        if not isinstance(bundle_list, list):
-                            bundle_list = []
+                        old_bundle = json.load(f)
+                        if isinstance(old_bundle, dict) and "orgs" in old_bundle:
+                            orgs_list = old_bundle["orgs"]
                 except Exception:
                     pass
             
             # 去重并添加新会话
-            bundle_list = [s for s in bundle_list if s.get("id") != SUBDOMAIN]
-            bundle_list.append(session_data)
+            orgs_list = [o for o in orgs_list if o.get("id") != SUBDOMAIN and o.get("domain_name") != f"{SUBDOMAIN}.retool.com"]
+            orgs_list.append(session_org)
+            
+            bundle_data = {
+                "bundle_version": "1",
+                "generated_at": now_time,
+                "generated_by": {
+                    "tool": "retoolautoregautomange",
+                    "script": "signup_playwright.py"
+                },
+                "expires_at": expires_at,
+                "org_count": len(orgs_list),
+                "verified_models": ["gpt-5.5", "claude-sonnet-4-6"],
+                "orgs": orgs_list
+            }
             
             with open(bundle_path, "w", encoding="utf-8") as f:
-                json.dump(bundle_list, f, indent=2, ensure_ascii=False)
+                json.dump(bundle_data, f, indent=2, ensure_ascii=False)
             
-            print(f"\n[OK] 成功自动将本次注册的登录态保存至: manage/runtime/session_bundle.json !")
+            print(f"\n[OK] 成功自动将本次注册的登录态保存至符合网关规范的: manage/runtime/session_bundle.json !")
 
         await page.wait_for_timeout(5000)
     finally:
