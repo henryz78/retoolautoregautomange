@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -125,8 +126,39 @@ async def main() -> None:
         if signup_resp.status >= 400:
             raise RuntimeError("signup 接口返回失败")
 
-        await page.wait_for_url(f"**{FOLLOWUP_URL_PART}**", timeout=60000)
-        print("\nfollowup url:", page.url)
+        # 等待页面重定向（可能会直接去 /auth/followup，也可能会去 /auth/verifyEmail）
+        print("等待页面重定向...")
+        for _ in range(30):
+            if "auth/" in page.url:
+                break
+            await page.wait_for_timeout(500)
+
+        print("\n当前页面 URL:", page.url)
+
+        # 处理同域名下已有团队，要求加入或创建新组织的提示页面（/auth/verifyEmail）
+        if "/auth/verifyEmail" in page.url:
+            print("检测到同域名团队提示，选择创建新组织...")
+            
+            # 等待姓名输入框可见并填充
+            name_input = page.locator('input[placeholder="Grace Hopper"], input[type="text"]').first
+            await name_input.wait_for(state="visible", timeout=15000)
+            await name_input.fill(FIRST_NAME)
+            
+            # 点击 "No, I want to create a new organization" 链接
+            create_org_btn = page.get_by_text("create a new organization", exact=False).first
+            await create_org_btn.click()
+            await page.wait_for_timeout(2000)
+            
+            # 如果弹出二次确认对话框 (通常是一个 "OK" 按钮)，点击确认
+            ok_btn = page.get_by_role("button", name=re.compile("^ok$", re.IGNORECASE)).first
+            if await ok_btn.count() > 0:
+                print("点击 OK 二次确认...")
+                await ok_btn.click()
+                await page.wait_for_timeout(2000)
+
+        # 确保跳转到最终的 followup 页面
+        await page.wait_for_url(f"**{FOLLOWUP_URL_PART}**", timeout=30000)
+        print("已成功到达 followup 页面:", page.url)
 
         # 稍微等一秒，确保新的 DOM 结构渲染完全，因为可能存在前端渲染延迟
         await page.wait_for_timeout(2000)
