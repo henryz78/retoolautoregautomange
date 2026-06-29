@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -27,6 +28,404 @@ LAST_NAME = os.getenv("LAST_NAME", "")
 SUBDOMAIN = os.getenv("SUBDOMAIN", "coftens")
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
+
+
+# ================= Retool Workspace Client & Helpers =================
+
+@dataclass
+class AgentConfig:
+    name: str
+    description: str
+    model: str
+    provider: str
+    temperature: float
+    max_iterations: int
+    instructions: str
+    thinking_enabled: bool
+
+
+class RetoolWorkspaceClient:
+    def __init__(self, page, workspace_base_url: str):
+        self.page = page
+        self.workspace_base_url = workspace_base_url.rstrip("/")
+
+    async def get_xsrf_token(self) -> str:
+        cookies = await self.page.context.cookies([self.workspace_base_url])
+        for cookie in cookies:
+            name = str(cookie.get("name") or "")
+            if name.lower() in {"x-xsrf-token", "xsrf-token", "xsrftoken", "__host-xsrftoken"}:
+                value = str(cookie.get("value") or "").strip()
+                if value:
+                    return value
+        raise RuntimeError("当前 workspace 登录态中未找到 XSRF cookie")
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        response = await self.page.context.request.fetch(
+            f"{self.workspace_base_url}{path}",
+            method=method,
+            params=params,
+            data=payload,
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "origin": self.workspace_base_url,
+                "referer": f"{self.workspace_base_url}/",
+                "x-retool-client-version": CLIENT_VERSION,
+                "x-xsrf-token": await self.get_xsrf_token(),
+            },
+        )
+        body_text = await response.text()
+        try:
+            body = json.loads(body_text)
+        except Exception:
+            body = body_text
+        if response.status >= 400:
+            raise RuntimeError(
+                f"Retool API 失败: {method} {path} -> HTTP {response.status}: {body}"
+            )
+        return body
+
+    async def get_ai_settings(self) -> Any:
+        return await self.request("GET", "/api/aiSettings")
+
+    async def get_agents_metadata(self) -> Any:
+        return await self.request("GET", "/api/agents/agentsMetadata")
+
+    async def get_environments(self) -> Any:
+        return await self.request("GET", "/api/environments")
+
+    async def create_workflow(self, payload: dict[str, Any]) -> Any:
+        return await self.request("POST", "/api/workflow", payload=payload)
+
+    async def save_workflow(self, workflow_id: str, new_workflow_data: dict[str, Any]) -> Any:
+        return await self.request("POST", f"/api/workflow/{workflow_id}", payload={"newWorkflowData": new_workflow_data})
+
+    async def release_workflow(
+        self,
+        workflow_id: str,
+        workflow_save_id: str,
+        *,
+        name: str = "0.0.2",
+        description: str = "",
+        additional_workflows: list[Any] | None = None,
+    ) -> Any:
+        return await self.request(
+            "POST",
+            "/api/workflowRelease",
+            payload={
+                "workflowId": workflow_id,
+                "workflowSaveId": workflow_save_id,
+                "name": name,
+                "description": description,
+                "additionalWorkflows": additional_workflows or [],
+            },
+        )
+
+
+def _replace_template_field(pattern: str, replacement: str, template_data: str, field_name: str) -> str:
+    updated, count = re.subn(pattern, replacement, template_data, count=1)
+    if count != 1:
+        raise RuntimeError(f"未能在 agent templateData 中定位字段: {field_name}")
+    return updated
+
+
+def replace_template_string_field(template_data: str, field_name: str, value: str) -> str:
+    pattern = rf'("{re.escape(field_name)}",)"(?:\\.|[^"\\])*"'
+    replacement = lambda match: f"{match.group(1)}{json.dumps(value, ensure_ascii=False)}"
+    updated, count = re.subn(pattern, replacement, template_data, count=1)
+    if count != 1:
+        raise RuntimeError(f"未能在 agent templateData 中定位字符串字段: {field_name}")
+    return updated
+
+
+def upsert_template_string_field(
+    template_data: str,
+    field_name: str,
+    value: str,
+    *,
+    insert_after_field: str | None = None,
+) -> str:
+    pattern = rf'("{re.escape(field_name)}",)"(?:\\.|[^"\\])*"'
+    if re.search(pattern, template_data):
+        return replace_template_string_field(template_data, field_name, value)
+
+    if not insert_after_field:
+        raise RuntimeError(f"未能在 agent templateData 中插入字符串字段: {field_name}")
+
+    insert_pattern = rf'("{re.escape(insert_after_field)}",)"(?:\\.|[^"\\])*"'
+    insert_fragment = f',{json.dumps(field_name, ensure_ascii=False)},{json.dumps(value, ensure_ascii=False)}'
+
+    def repl(match: re.Match[str]) -> str:
+        return f"{match.group(0)}{insert_fragment}"
+
+    updated, count = re.subn(insert_pattern, repl, template_data, count=1)
+    if count != 1:
+        raise RuntimeError(
+            f"未能在 agent templateData 中新增字段 {field_name}，缺少锚点字段: {insert_after_field}"
+        )
+    return updated
+
+
+def replace_template_numeric_field(template_data: str, field_name: str, value: int | float) -> str:
+    pattern = rf'("{re.escape(field_name)}",)-?\d+(?:\.\d+)?'
+    return _replace_template_field(pattern, rf'\g<1>{value}', template_data, field_name)
+
+
+def replace_template_bool_field(template_data: str, field_name: str, value: bool) -> str:
+    pattern = rf'("{re.escape(field_name)}",)(true|false)'
+    bool_literal = "true" if value else "false"
+    return _replace_template_field(pattern, rf"\g<1>{bool_literal}", template_data, field_name)
+
+
+def build_agent_template_data(
+    template_data: str,
+    *,
+    provider_id: str,
+    provider_name: str,
+    provider_resource_name: str,
+    instructions: str,
+    model: str,
+    temperature: float,
+    max_iterations: int,
+    thinking_enabled: bool,
+) -> str:
+    updated = template_data
+    updated = replace_template_string_field(updated, "providerId", provider_id)
+    updated = replace_template_string_field(updated, "providerName", provider_name)
+    updated = replace_template_string_field(updated, "model", model)
+    updated = upsert_template_string_field(
+        updated,
+        "providerResourceName",
+        provider_resource_name,
+        insert_after_field="model",
+    )
+    updated = replace_template_string_field(updated, "instructions", instructions)
+    updated = replace_template_numeric_field(updated, "temperature", temperature)
+    updated = replace_template_numeric_field(updated, "maxIterations", max_iterations)
+    updated = replace_template_bool_field(updated, "thinkingEnabled", thinking_enabled)
+    return updated
+
+
+def load_agent_create_seed_payload() -> dict[str, Any]:
+    from urllib.parse import urlsplit
+    har_path = os.path.join(os.path.dirname(__file__), "3、创建agent配置agent模型.har")
+    try:
+        with open(har_path, "r", encoding="utf-8") as har_file:
+            har_payload = json.load(har_file)
+    except OSError as exc:
+        raise RuntimeError(f"无法读取 agent 创建 HAR 文件: {har_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"agent 创建 HAR 不是有效 JSON: {har_path}") from exc
+
+    entries = har_payload.get("log", {}).get("entries", [])
+    for entry in entries:
+        request = entry.get("request", {})
+        if request.get("method") != "POST":
+            continue
+        if urlsplit(str(request.get("url") or "")).path != "/api/workflow":
+            continue
+
+        post_text = request.get("postData", {}).get("text")
+        if not isinstance(post_text, str) or not post_text.strip():
+            raise RuntimeError("agent 创建 HAR 中的 /api/workflow 请求缺少 postData.text")
+
+        try:
+            payload = json.loads(post_text)
+        except Exception:
+            payload = post_text
+        if not isinstance(payload, dict):
+            raise RuntimeError("agent 创建 HAR 中的 /api/workflow 请求体格式异常")
+        return payload
+
+    raise RuntimeError("agent 创建 HAR 中未找到 POST /api/workflow 请求")
+
+
+def resolve_agent_provider(ai_settings: Any, provider: str) -> tuple[str, str, str]:
+    if not isinstance(ai_settings, dict):
+        raise RuntimeError("aiSettings 响应格式异常")
+
+    if provider == "openai":
+        resource_name = ai_settings.get("assistOpenAIResourceName")
+        provider_id = "retoolAIBuiltIn::openAI"
+        provider_name = "openAI"
+    elif provider == "anthropic":
+        resource_name = ai_settings.get("assistAnthropicResourceName")
+        provider_id = "retoolAIBuiltIn::anthropic"
+        provider_name = "anthropic"
+    else:
+        raise RuntimeError(f"不支持的 agent provider: {provider}")
+
+    if not isinstance(resource_name, str) or not resource_name.strip():
+        raise RuntimeError(f"aiSettings 中未返回 provider 资源名: {provider}")
+
+    return provider_id, provider_name, resource_name.strip()
+
+
+def resolve_agent_root_folder_id(agents_metadata: Any) -> int:
+    if not isinstance(agents_metadata, dict):
+        raise RuntimeError("agentsMetadata 响应格式异常")
+
+    folders = agents_metadata.get("agentFolders")
+    if not isinstance(folders, list) or not folders:
+        raise RuntimeError("agentsMetadata 中缺少 agentFolders")
+
+    for folder in folders:
+        if isinstance(folder, dict) and folder.get("systemFolder") and folder.get("folderType") == "agent":
+            folder_id = folder.get("id")
+            if isinstance(folder_id, int):
+                return folder_id
+
+    first_folder = folders[0]
+    if isinstance(first_folder, dict) and isinstance(first_folder.get("id"), int):
+        return first_folder["id"]
+
+    raise RuntimeError("未能从 agentsMetadata 中解析 agent folderId")
+
+
+def collect_existing_agent_names(agents_metadata: Any) -> set[str]:
+    if not isinstance(agents_metadata, dict):
+        return set()
+    agents = agents_metadata.get("agentsMetadata")
+    if not isinstance(agents, list):
+        return set()
+    names: set[str] = set()
+    for agent in agents:
+        if isinstance(agent, dict):
+            name = agent.get("name")
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip())
+    return names
+
+
+def build_unique_agent_name(preferred_name: str, existing_names: set[str]) -> str:
+    if preferred_name not in existing_names:
+        return preferred_name
+
+    suffix = 2
+    while True:
+        candidate = f"{preferred_name}-{suffix}"
+        if candidate not in existing_names:
+            return candidate
+        suffix += 1
+
+
+async def create_and_configure_agent(
+    page,
+    workspace_base_url: str,
+    agent_config: AgentConfig,
+) -> dict[str, Any]:
+    workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
+    ai_settings = await workspace_client.get_ai_settings()
+    agents_metadata = await workspace_client.get_agents_metadata()
+    environments = await workspace_client.get_environments()
+
+    environments_list = environments.get("environments") if isinstance(environments, dict) else None
+    if not isinstance(environments_list, list) or not environments_list:
+        raise RuntimeError("workspace environments 未初始化完成，暂时不能创建 agent")
+
+    provider_id, provider_name, provider_resource_name = resolve_agent_provider(ai_settings, agent_config.provider)
+    folder_id = resolve_agent_root_folder_id(agents_metadata)
+    existing_names = collect_existing_agent_names(agents_metadata)
+    preferred_name = agent_config.name.strip() or "agent"
+    agent_name = build_unique_agent_name(preferred_name, existing_names)
+
+    seed_payload = load_agent_create_seed_payload()
+    create_payload = json.loads(json.dumps(seed_payload))
+    create_payload["name"] = agent_name
+    create_payload["description"] = agent_config.description
+    create_payload["folderId"] = folder_id
+
+    print(f"  -> 正在创建 AI 机器人: {agent_name} ({agent_config.model})...")
+    created_workflow = await workspace_client.create_workflow(create_payload)
+    if not isinstance(created_workflow, dict):
+        raise RuntimeError("创建 agent 后返回数据格式异常")
+
+    workflow_id = created_workflow.get("id")
+    template_data = created_workflow.get("templateData")
+    if not isinstance(workflow_id, str) or not workflow_id.strip():
+        raise RuntimeError("创建 agent 后未返回 workflowId")
+    if not isinstance(template_data, str) or not template_data:
+        raise RuntimeError("创建 agent 后未返回 templateData")
+
+    updated_template_data = build_agent_template_data(
+        template_data,
+        provider_id=provider_id,
+        provider_name=provider_name,
+        provider_resource_name=provider_resource_name,
+        instructions=agent_config.instructions,
+        model=agent_config.model,
+        temperature=agent_config.temperature,
+        max_iterations=agent_config.max_iterations,
+        thinking_enabled=agent_config.thinking_enabled,
+    )
+
+    workflow_data = json.loads(json.dumps(created_workflow))
+    workflow_data["name"] = agent_name
+    workflow_data["description"] = agent_config.description
+    workflow_data["folderId"] = folder_id
+    workflow_data["templateData"] = updated_template_data
+
+    saved_workflow = await workspace_client.save_workflow(workflow_id, workflow_data)
+    if not isinstance(saved_workflow, dict):
+        raise RuntimeError("保存 agent 配置后返回数据格式异常")
+
+    workflow_save_id = saved_workflow.get("saveId")
+    if not isinstance(workflow_save_id, str) or not workflow_save_id.strip():
+        raise RuntimeError("保存 agent 配置后未返回 workflow saveId")
+
+    release_info = await workspace_client.release_workflow(
+        workflow_id,
+        workflow_save_id.strip(),
+    )
+    if not isinstance(release_info, dict):
+        raise RuntimeError("发布 agent 后返回数据格式异常")
+
+    print(f"  -> 机器人 {agent_name} 创建发布成功！")
+    return {
+        "workflowId": workflow_id,
+        "name": agent_name,
+    }
+
+
+async def create_and_configure_agents(page, workspace_base_url: str) -> None:
+    agent_configs = [
+        AgentConfig(
+            name=os.getenv("RET0OL_AGENT_NAME", "gpt5"),
+            description="",
+            model=os.getenv("RET0OL_AGENT_MODEL", "gpt-4o"), 
+            provider="openai",
+            temperature=0.3,
+            max_iterations=50,
+            instructions="",
+            thinking_enabled=False,
+        ),
+        AgentConfig(
+            name=os.getenv("RET0OL_AGENT_CLAUDE_NAME", "claude"),
+            description="",
+            model=os.getenv("RET0OL_AGENT_CLAUDE_MODEL", "claude-3-5-sonnet"), 
+            provider="anthropic",
+            temperature=0.3,
+            max_iterations=10,
+            instructions="",
+            thinking_enabled=False,
+        )
+    ]
+
+    for config in agent_configs:
+        try:
+            await create_and_configure_agent(page, workspace_base_url, config)
+        except Exception as exc:
+            print(f"[WARN] 自动配置 AI 机器人 {config.name} 失败: {exc}，请稍后手动在网页创建。")
+
+
+# =====================================================================
 
 
 async def response_body(resp) -> str:
@@ -63,23 +462,12 @@ async def fill_signup_form(page) -> None:
 
 
 async def fill_followup_form(page) -> None:
-    # 适配新的 Onboarding/Followup 页面表单。
-    # 页面有 "What's your full name?" 和 "What's the name of your organization?"
-    # 输入框可能使用了 placeholder，或者就是普通的 input[type="text"]。
-    # 我们优先通过 placeholder 或者标签定位，如果不行再退化为 nth(0) 和 nth(1)。
-    
-    # 等待输入框加载并可见
     first_input = page.locator('input[placeholder="Grace Hopper"], input[name="fullName"], input[type="text"]').first
     await first_input.wait_for(state="visible", timeout=15000)
-    
-    # 填充姓名
     await first_input.fill(FIRST_NAME)
     
-    # 填充子域名组织名称
     second_input = page.locator('input[placeholder="my-org"], input[name="subdomain"], input[type="text"]').nth(1)
     if await second_input.count() == 0:
-        # 如果没有找到第二个，可能直接用 name="orgName" 或其他的。
-        # 兜底：直接通过第二个普通的 text 框输入
         second_input = page.locator('input[type="text"]').nth(1)
     
     await second_input.fill(SUBDOMAIN)
@@ -127,7 +515,6 @@ async def main() -> None:
         if signup_resp.status >= 400:
             raise RuntimeError("signup 接口返回失败")
 
-        # 等待页面重定向（可能会直接去 /auth/followup，也可能会去 /auth/verifyEmail）
         print("等待页面重定向...")
         for _ in range(30):
             if "auth/" in page.url:
@@ -136,45 +523,33 @@ async def main() -> None:
 
         print("\n当前页面 URL:", page.url)
 
-        # 处理同域名下已有团队，要求加入或创建新组织的提示页面（/auth/verifyEmail）
         if "/auth/verifyEmail" in page.url:
             print("检测到同域名团队提示，选择创建新组织...")
-            
-            # 等待姓名输入框可见并填充
             name_input = page.locator('input[placeholder="Grace Hopper"], input[type="text"]').first
             await name_input.wait_for(state="visible", timeout=15000)
             await name_input.fill(FIRST_NAME)
             
-            # 点击 "No, I want to create a new organization" 链接
             create_org_btn = page.get_by_text("create a new organization", exact=False).first
             await create_org_btn.click()
             await page.wait_for_timeout(2000)
             
-            # 如果弹出二次确认对话框 (通常是一个 "OK" 按钮)，点击确认
             ok_btn = page.get_by_role("button", name=re.compile("^ok$", re.IGNORECASE)).first
             if await ok_btn.count() > 0:
                 print("点击 OK 二次确认...")
                 await ok_btn.click()
                 await page.wait_for_timeout(2000)
 
-        # 确保跳转到最终的 followup 页面
         await page.wait_for_url(f"**{FOLLOWUP_URL_PART}**", timeout=30000)
         print("已成功到达 followup 页面:", page.url)
 
-        # 稍微等一秒，确保新的 DOM 结构渲染完全，因为可能存在前端渲染延迟
         await page.wait_for_timeout(2000)
         await fill_followup_form(page)
-
-        # 稍微等待子域名冲突检测的 "Checking..." 消失（在 Continue 上方）
-        # 页面上有 "Checking..." 动画或按钮变灰色
-        # 我们这里等待一下，最长等 5 秒，或者直接点击
         await page.wait_for_timeout(2000)
 
         followup_button = page.get_by_role("button", name="Continue").last
         if await followup_button.count() == 0:
             raise RuntimeError("未找到 followup Continue 按钮")
 
-        # 使用嵌套的 expect_response 代替 wait_for_response，以防 cloakbrowser 的 Page 包装类未暴露该方法。
         async with page.expect_response(
             lambda resp: "/api/user/changeName" in resp.url and resp.request.method == "POST",
             timeout=60000,
@@ -204,7 +579,6 @@ async def main() -> None:
         if init_org_resp.status >= 400:
             raise RuntimeError("initializeOrganization 接口返回失败")
 
-        # 处理随后的问卷调查页面（Role, Familiarity, Referral）
         print("\n处理后续问卷调查...")
         for i in range(5):
             await page.wait_for_load_state("domcontentloaded")
@@ -228,7 +602,6 @@ async def main() -> None:
                 ref_locator = page.get_by_text("Web search")
                 await ref_locator.first.click()
                 await page.get_by_role("button", name="Continue").last.click()
-                # 最后一页问卷提交后，等待跳转到控制台
                 await page.wait_for_timeout(5000)
             elif "/resources" in url or "/apps" in url or ("retool.com" in url and "auth" not in url):
                 print("已成功到达控制台，问卷填写完毕！")
@@ -237,10 +610,24 @@ async def main() -> None:
                 await page.wait_for_timeout(2000)
 
         print("\nfinal url:", page.url)
-        cookies = await context.cookies([BASE, f"https://{SUBDOMAIN}.retool.com"])
-        print("cookies:", cookies)
 
-        # 提取关键的登录凭证 Token
+        # ----------------- 自动配置 AI 机器人 -----------------
+        workspace_base_url = f"https://{SUBDOMAIN}.retool.com"
+        print("等待工作空间接口就绪...")
+        for _ in range(30):
+            if page.url.startswith(workspace_base_url) and "auth" not in page.url:
+                break
+            await page.wait_for_timeout(1000)
+
+        print("正在自动创建并配置 AI 机器人 (GPT-4o & Claude 3.5 Sonnet)...")
+        try:
+            await create_and_configure_agents(page, workspace_base_url)
+            print("AI 机器人全自动配置完成！")
+        except Exception as exc:
+            print(f"[WARN] 自动配置 AI 机器人失败: {exc}，请稍后手动在网页创建。")
+        # -----------------------------------------------------
+
+        cookies = await context.cookies([BASE, f"https://{SUBDOMAIN}.retool.com"])
         xsrf_token = ""
         access_token = ""
         for cookie in cookies:
@@ -251,7 +638,7 @@ async def main() -> None:
 
         if xsrf_token and access_token:
             now_time = int(time.time())
-            expires_at = now_time + 7 * 24 * 60 * 60  # 默认 7 天有效期
+            expires_at = now_time + 7 * 24 * 60 * 60
             
             session_org = {
                 "id": SUBDOMAIN,
@@ -265,12 +652,10 @@ async def main() -> None:
                 "verified_models": ["gpt-5.5", "claude-sonnet-4-6"]
             }
             
-            # 网关所需的 session_bundle.json 文件保存路径
             bundle_dir = os.path.join(os.path.dirname(__file__), "manage", "runtime")
             os.makedirs(bundle_dir, exist_ok=True)
             bundle_path = os.path.join(bundle_dir, "session_bundle.json")
             
-            # 读取并遵循网关定义的 Pydantic SessionBundle 规范
             orgs_list = []
             if os.path.exists(bundle_path):
                 try:
@@ -281,7 +666,6 @@ async def main() -> None:
                 except Exception:
                     pass
             
-            # 去重并添加新会话
             orgs_list = [o for o in orgs_list if o.get("id") != SUBDOMAIN and o.get("domain_name") != f"{SUBDOMAIN}.retool.com"]
             orgs_list.append(session_org)
             
