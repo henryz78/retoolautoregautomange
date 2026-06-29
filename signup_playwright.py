@@ -244,33 +244,49 @@ async def create_and_configure_agent(
 ) -> dict[str, Any]:
     print(f"  -> 正在网页点击创建机器人 {agent_config.name} ({agent_config.model})...")
     
-    # 1. 导航到 AI 页面
-    await page.goto(f"{workspace_base_url}/agents", wait_until="domcontentloaded", timeout=30000)
-    await page.wait_for_timeout(3000)
-    
-    # 2. 点击 "Create agent" 或 "+ Agent" 按钮
+    # 1. 导航到 AI 页面，增加重试以防刚注册完页面还没初始化好
+    target_url = f"{workspace_base_url}/agents"
     create_btn = page.locator('button:has-text("Agent"), button:has-text("Create agent"), [data-testid="EmptyState::CreateAgent"]').first
-    await create_btn.wait_for(state="visible", timeout=15000)
+    
+    for load_attempt in range(1, 4):
+        try:
+            print(f"  -> 导航至 /agents (第 {load_attempt}/3 次尝试)...")
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=25000)
+            await page.wait_for_timeout(3000)
+            await create_btn.wait_for(state="visible", timeout=12000)
+            break
+        except PlaywrightTimeoutError as exc:
+            if load_attempt == 3:
+                raise RuntimeError(f"加载 /agents 页面超时，未能找到创建按钮: {exc}")
+            print(f"  -> 页面加载缓慢或按钮未出现，重试页面刷新...")
+            await page.reload(wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
+            
     await create_btn.click()
     await page.wait_for_timeout(2000)
     
-    # 3. 点击 "Start from scratch" 卡片
+    # 2. 点击 "Start from scratch" 卡片
     start_scratch = page.locator('div[class*="modal"] :text("Start from scratch"), div[class*="modal"] :text-matches("Start from scratch", "i")').first
     await start_scratch.wait_for(state="visible", timeout=15000)
     await start_scratch.click()
     await page.wait_for_timeout(1000)
     
+    # 3. 点击右下角的 Create 按钮 (进入填名字界面)
+    next_btn = page.locator('div[class*="modal"] button:has-text("Create")').first
+    await next_btn.click()
+    await page.wait_for_timeout(1500)
+
     # 4. 填入机器人名字 (如 gpt 或 claude) —— 注意：必须先填名字，底部的 Create 按钮才会变成启用状态！
     name_input = page.locator('div[class*="modal"] input[placeholder="Weather Agent"], div[class*="modal"] input[placeholder="Agent name"], div[class*="modal"] input[type="text"]').first
     await name_input.wait_for(state="visible", timeout=15000)
     await name_input.fill(agent_config.name)
     await page.wait_for_timeout(1000)
     
-    # 6. 点击确认创建按钮 (真正开始创建并跳转)
+    # 5. 点击确认创建按钮 (真正开始创建并跳转)
     confirm_btn = page.locator('div[class*="modal"] button:has-text("Create"), div[class*="modal"] button[type="submit"]').first
     await confirm_btn.click()
     
-    # 7. 等待页面跳转到编辑器
+    # 6. 等待页面跳转到编辑器
     workflow_id = ""
     for _ in range(25):
         await page.wait_for_timeout(1000)
@@ -286,7 +302,7 @@ async def create_and_configure_agent(
 
     print(f"  -> 成功获取新创建的机器人的 workflowId: {workflow_id}")
     
-    # 8. 使用 API 进行高智商配置
+    # 7. 使用 API 进行高智商配置
     workspace_client = RetoolWorkspaceClient(page, workspace_base_url)
     ai_settings = await workspace_client.get_ai_settings()
     
@@ -332,7 +348,7 @@ async def create_and_configure_agent(
         workflow_save_id.strip(),
     )
     
-    # 9. 回到工作空间主页
+    # 8. 回到工作空间主页
     await page.goto(workspace_base_url, wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
     print(f"  -> 机器人 {agent_config.name} 配置发布完成！")
@@ -418,15 +434,19 @@ async def fill_followup_form(page) -> None:
     await second_input.fill(SUBDOMAIN)
 
 
-async def main() -> None:
+async def run_signup_attempt() -> bool:
     profile_dir = os.path.join(os.path.dirname(__file__), "cloakbrowser_profile")
     os.makedirs(profile_dir, exist_ok=True)
 
     print("启动 CloakBrowser...")
-    context = await cloakbrowser.launch_persistent_context_async(
-        user_data_dir=profile_dir,
-        headless=HEADLESS,
-    )
+    try:
+        context = await cloakbrowser.launch_persistent_context_async(
+            user_data_dir=profile_dir,
+            headless=HEADLESS,
+        )
+    except Exception as exc:
+        print(f"启动浏览器失败: {exc}")
+        return False
     
     if context.pages:
         page = context.pages[0]
@@ -435,19 +455,36 @@ async def main() -> None:
 
     try:
         print(f"打开: {SIGNUP_URL}")
-        await page.goto(SIGNUP_URL, wait_until="domcontentloaded", timeout=60000)
-        await wait_for_signup_form(page)
-        print("注册表单已出现")
+        # 设置超时时间为 45 秒，避免无限等待
+        await page.goto(SIGNUP_URL, wait_until="domcontentloaded", timeout=45000)
+        
+        # 等待注册表单，超时缩短到 35 秒以便快速失败并重试
+        email_locator = page.locator('input[name="email"], input[placeholder="Work email"]')
+        form_appeared = False
+        for _ in range(18):
+            if await email_locator.count() > 0 and await email_locator.first.is_visible():
+                form_appeared = True
+                break
+            title = await page.title()
+            if "Just a moment" in title:
+                print("等待 Cloudflare 挑战通过...")
+            await page.wait_for_timeout(2000)
+            
+        if not form_appeared:
+            print("[WARN] 35 秒内未出现注册表单，可能卡在 Cloudflare。")
+            return False
 
+        print("注册表单已出现")
         await fill_signup_form(page)
 
         continue_button = page.get_by_role("button", name="Continue").last
         if await continue_button.count() == 0:
-            raise RuntimeError("未找到注册页 Continue 按钮")
+            print("[WARN] 未找到注册页 Continue 按钮")
+            return False
 
         async with page.expect_response(
             lambda resp: "/api/signup" in resp.url and resp.request.method == "POST",
-            timeout=60000,
+            timeout=45000,
         ) as signup_info:
             await continue_button.click()
 
@@ -458,7 +495,8 @@ async def main() -> None:
         print(pretty_text(signup_body))
 
         if signup_resp.status >= 400:
-            raise RuntimeError("signup 接口返回失败")
+            print("[WARN] signup 接口返回失败")
+            return False
 
         print("等待页面重定向...")
         try:
@@ -503,15 +541,16 @@ async def main() -> None:
 
         followup_button = page.get_by_role("button", name="Continue").last
         if await followup_button.count() == 0:
-            raise RuntimeError("未找到 followup Continue 按钮")
+            print("[WARN] 未找到 followup Continue 按钮")
+            return False
 
         async with page.expect_response(
             lambda resp: "/api/user/changeName" in resp.url and resp.request.method == "POST",
-            timeout=60000,
+            timeout=45000,
         ) as change_name_info:
             async with page.expect_response(
                 lambda resp: "/api/organization/admin/initializeOrganization" in resp.url and resp.request.method == "POST",
-                timeout=60000,
+                timeout=45000,
             ) as init_org_info:
                 await followup_button.click()
 
@@ -529,10 +568,9 @@ async def main() -> None:
         print("status:", init_org_resp.status)
         print(pretty_text(init_org_body))
 
-        if change_name_resp.status >= 400:
-            raise RuntimeError("changeName 接口返回失败")
-        if init_org_resp.status >= 400:
-            raise RuntimeError("initializeOrganization 接口返回失败")
+        if change_name_resp.status >= 400 or init_org_resp.status >= 400:
+            print("[WARN] 初始化组织或修改名字失败")
+            return False
 
         print("\n处理后续问卷调查...")
         for i in range(5):
@@ -567,6 +605,10 @@ async def main() -> None:
         print("\nfinal url:", page.url)
 
         # ----------------- 自动配置 AI 机器人 -----------------
+        # 在跳转到 /agents 之前，先让新注册的工作空间彻底“冷静/就绪” 6 秒钟，防止接口报错
+        print("等待 6 秒使工作空间就绪...")
+        await page.wait_for_timeout(6000)
+        
         workspace_base_url = f"https://{SUBDOMAIN}.retool.com"
         print("等待工作空间接口就绪...")
         for _ in range(30):
@@ -575,11 +617,8 @@ async def main() -> None:
             await page.wait_for_timeout(1000)
 
         print(f"正在自动创建并配置 AI 机器人 (gpt-5.5 & Claude 3.5 Sonnet)...")
-        try:
-            await create_and_configure_agents(page, workspace_base_url)
-            print("AI 机器人全自动配置完成！")
-        except Exception as exc:
-            print(f"[WARN] 自动配置 AI 机器人失败: {exc}，请稍后手动在网页创建。")
+        await create_and_configure_agents(page, workspace_base_url)
+        print("AI 机器人全自动配置完成！")
         # -----------------------------------------------------
 
         cookies = await context.cookies([BASE, f"https://{SUBDOMAIN}.retool.com"])
@@ -641,15 +680,40 @@ async def main() -> None:
                 json.dump(bundle_data, f, indent=2, ensure_ascii=False)
             
             print(f"\n[OK] 成功自动将本次注册的登录态保存至符合网关规范的: manage/runtime/session_bundle.json !")
+            return True
+        else:
+            print("[WARN] 未能在 Cookie 中提取到登录凭证")
+            return False
 
-        await page.wait_for_timeout(5000)
+    except Exception as exc:
+        print(f"[WARN] 本次尝试捕获到异常: {exc}")
+        return False
     finally:
         try:
             await page.screenshot(path="screenshot.png")
             print("保存最终截图至 screenshot.png")
         except Exception:
             pass
-        await context.close()
+        try:
+            await context.close()
+        except Exception:
+            pass
+
+
+async def main() -> None:
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        print(f"\n[尝试 {attempt}/{max_attempts}] 启动全自动注册流程...")
+        success = await run_signup_attempt()
+        if success:
+            print("[OK] 全自动注册、机器人配置、数据保存全部圆满成功！")
+            return
+        else:
+            print(f"[WARN] 第 {attempt} 次尝试未能完全跑通，正在清理环境并在 5 秒后自动重试...")
+            await asyncio.sleep(5)
+            
+    print("\n[ERROR] 连续 3 次尝试均告失败，程序退出。")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":
